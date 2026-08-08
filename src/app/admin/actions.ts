@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
+import { USERNAME_PATTERN } from "@/lib/card-draft";
 
 /**
  * Every mutation below funnels through this.
@@ -623,4 +624,128 @@ export async function deleteCard(cardId: string): Promise<Result> {
   } catch (e) {
     return fail(e);
   }
+}
+
+/**
+ * Creates an account and its card in one go, on someone's behalf.
+ *
+ * Selling a card in person means the customer has to sign up, confirm an
+ * email, pick a handle and fill a form before anything can be printed — and
+ * the person selling is standing there waiting. This does the whole of it from
+ * the console and hands back credentials to pass on.
+ *
+ * Everything runs through the service role rather than the admin's session:
+ * creating an auth user needs it, and the card insert does too, because the
+ * only INSERT policy on card_profiles is "your own row" and this row belongs
+ * to somebody else.
+ */
+export async function createCustomer(input: {
+  email: string;
+  password?: string;
+  fullName: string;
+  username: string;
+  headline?: string;
+  company?: string;
+  phone?: string;
+  location?: string;
+  template?: string;
+  accentColor?: string;
+  /** Off by default: a card built for someone should be theirs to release. */
+  publish?: boolean;
+}): Promise<Result<{ email: string; password: string; username: string }>> {
+  try {
+    await assertAdmin();
+
+    const email = input.email.trim().toLowerCase();
+    const username = input.username.trim().toLowerCase();
+    const fullName = input.fullName.trim();
+
+    if (!/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(email)) {
+      throw new Error("That email address doesn't look right.");
+    }
+    if (!fullName) throw new Error("Give them a name.");
+    if (!USERNAME_PATTERN.test(username)) {
+      throw new Error("Handle must be 3–30 characters: lowercase letters, numbers, - and _.");
+    }
+
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceKey) {
+      throw new Error("Creating accounts needs SUPABASE_SERVICE_ROLE_KEY on the server.");
+    }
+
+    const admin = createServiceClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey, {
+      auth: { persistSession: false },
+    });
+
+    // Checked before creating the user, so a clash does not leave an account
+    // behind with no card attached to it.
+    const { data: clash } = await admin
+      .from("card_profiles")
+      .select("id")
+      .ilike("username", username)
+      .maybeSingle();
+    if (clash) throw new Error(`The handle “${username}” is already taken.`);
+
+    const password = input.password?.trim() || generatePassword();
+    if (password.length < 8) throw new Error("Password must be at least 8 characters.");
+
+    const { data: created, error: authError } = await admin.auth.admin.createUser({
+      email,
+      password,
+      // Confirmed on the spot: the customer is standing in front of you, and
+      // an unconfirmed account cannot sign in.
+      email_confirm: true,
+      user_metadata: { full_name: fullName },
+    });
+
+    if (authError) {
+      throw new Error(
+        authError.message.toLowerCase().includes("already")
+          ? "An account with that email already exists."
+          : authError.message
+      );
+    }
+
+    const userId = created.user?.id;
+    if (!userId) throw new Error("The account was not created.");
+
+    const { error: cardError } = await admin.from("card_profiles").insert({
+      user_id: userId,
+      username,
+      full_name: fullName,
+      headline: input.headline?.trim() || null,
+      company: input.company?.trim() || null,
+      location: input.location?.trim() || null,
+      accent_color: input.accentColor || "#111111",
+      template: input.template || "minimal",
+      font: "sans",
+      published: input.publish === true,
+      buttons: input.phone?.trim()
+        ? [{ kind: "phone", label: "Call", value: input.phone.trim(), enabled: true }]
+        : [],
+      phone: input.phone?.trim() || null,
+      email,
+    });
+
+    if (cardError) {
+      // Roll the account back rather than leaving one that can sign in to
+      // nothing and holds an address nobody can re-register.
+      await admin.auth.admin.deleteUser(userId);
+      throw new Error(cardError.message);
+    }
+
+    revalidatePath("/admin/users");
+    revalidatePath("/admin/cards");
+    return { ok: true, data: { email, password, username } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Readable rather than maximally random — this gets read out loud. */
+function generatePassword(): string {
+  const words = ["tap", "card", "link", "sharp", "quick", "bright", "solid", "clear"];
+  const pick = () => words[Math.floor(Math.random() * words.length)];
+  const digits = String(Math.floor(1000 + Math.random() * 9000));
+  return `${pick()}-${pick()}-${digits}`;
 }

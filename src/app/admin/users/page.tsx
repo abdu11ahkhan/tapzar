@@ -1,4 +1,5 @@
-import { ShieldCheck, Ban, Search } from "lucide-react";
+import Link from "next/link";
+import { ShieldCheck, Ban, Search, UserPlus } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import ActionButton from "../ActionButton";
 import ConfirmByName from "../ConfirmByName";
@@ -59,6 +60,13 @@ export default async function AdminUsers({
             suspend someone here.
           </p>
         </div>
+
+        {/* Selling in person: build the account and the card here rather than
+            talking someone through signing up while they wait. */}
+        <Link href="/admin/users/new" className="app-btn app-btn-primary">
+          <UserPlus className="h-3.5 w-3.5" />
+          Set someone up
+        </Link>
 
         <form method="get" className="flex gap-2">
           <div className="relative">
