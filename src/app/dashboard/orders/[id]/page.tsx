@@ -1,9 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Check, FileText, MapPin } from "lucide-react";
+import { ArrowLeft, Check, FileText, MapPin, CreditCard } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { STATUS_LABELS, STATUS_STEPS, statusTone } from "../status";
-import ProofUpload from "./ProofUpload";
 import ReorderButton from "./ReorderButton";
 import CopyRow from "@/components/nfc/CopyRow";
 
@@ -11,10 +10,14 @@ export const dynamic = "force-dynamic";
 
 export default async function OrderDetail({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  /** How the trip to the gateway ended, so the page can say so. */
+  searchParams: Promise<{ pay?: string }>;
 }) {
   const { id } = await params;
+  const { pay: payState } = await searchParams;
   const supabase = await createClient();
 
   const {
@@ -142,58 +145,61 @@ export default async function OrderDetail({
       {/* Payment */}
       {order.status === "pending" && order.amount_pkr > 0 && (
         <section className="sticker-lg rounded-2xl border-2 border-ink bg-acid p-6 text-ink">
-          <p className="text-xl font-black tracking-tight">Send Rs.{order.amount_pkr.toLocaleString()}</p>
-          <p className="mt-1 text-sm font-semibold opacity-70">
-            Transfer the amount, then upload a screenshot. We confirm manually —
-            usually within a few hours.
+          <p className="text-xl font-black tracking-tight">
+            Pay Rs.{order.amount_pkr.toLocaleString()}
           </p>
-          <div className="mt-4 space-y-3">
-            {payMethods.length === 0 ? (
-              <div className="rounded-xl border-2 border-ink bg-white p-4 text-sm font-semibold">
-                <p className="text-[11px] font-black uppercase tracking-widest opacity-45">
-                  pay to
-                </p>
-                <p className="mt-1">
-                  No payment account is set up yet — message us and we&apos;ll send
-                  the details.
-                </p>
-              </div>
-            ) : (
-              payMethods.map((m) => (
-                <div
-                  key={m.id}
-                  className="rounded-xl border-2 border-ink bg-white p-4"
-                >
-                  <p className="text-sm font-black">{m.label}</p>
-                  <div className="mt-2 space-y-0.5">
-                    {m.account_name && (
-                      <CopyRow label="Name" value={m.account_name} accent="#0a0a0a" />
-                    )}
-                    {m.account_number && (
-                      <CopyRow label="Account" value={m.account_number} accent="#0a0a0a" />
-                    )}
-                    {m.iban && <CopyRow label="IBAN" value={m.iban} accent="#0a0a0a" />}
-                  </div>
-                  {m.note && (
-                    <p className="mt-2 text-[11px] font-semibold opacity-50">{m.note}</p>
-                  )}
-                  <p className="mt-1.5 px-0.5 text-[10px] font-semibold opacity-35">
-                    Tap any line to copy it.
-                  </p>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="mt-4">
-            <div className="rounded-xl bg-ink p-4">
-              <ProofUpload
-                orderId={order.id}
-                userId={user.id}
-                reference={order.reference}
-                existing={order.payment_proof_url}
-              />
-            </div>
-          </div>
+          <p className="mt-1 text-sm font-semibold opacity-70">
+            Card payment through Safepay. Your order moves to printing the
+            moment it clears — nothing to upload and nothing to wait for.
+          </p>
+
+          {payState === "cancelled" && (
+            <p className="mt-4 rounded-xl border-2 border-ink bg-white px-4 py-3 text-sm font-bold">
+              Payment cancelled. Nothing was charged — you can try again.
+            </p>
+          )}
+          {payState === "done" && (
+            <p className="mt-4 rounded-xl border-2 border-ink bg-white px-4 py-3 text-sm font-bold">
+              Thanks — we&apos;re confirming with the bank. This page updates on
+              its own once it clears.
+            </p>
+          )}
+          {payState === "unconfigured" && (
+            <p className="mt-4 rounded-xl border-2 border-ink bg-white px-4 py-3 text-sm font-bold">
+              Card payment isn&apos;t switched on yet. Message us and we&apos;ll
+              take payment another way.
+            </p>
+          )}
+          {payState === "error" && (
+            <p className="mt-4 rounded-xl border-2 border-ink bg-white px-4 py-3 text-sm font-bold">
+              We couldn&apos;t open the payment page. Try again, or message us.
+            </p>
+          )}
+
+          <Link
+            href={`/api/safepay/checkout?order=${order.id}`}
+            prefetch={false}
+            className="sticker sticker-press mt-5 flex h-14 w-full items-center justify-center gap-2 rounded-full border-2 border-ink bg-ink text-base font-black uppercase tracking-tight text-acid"
+          >
+            <CreditCard className="h-5 w-5" />
+            {payState === "cancelled" || payState === "error" ? "try again" : "pay now"}
+          </Link>
+
+          <p className="mt-3 text-center text-[11px] font-bold uppercase tracking-widest opacity-45">
+            secured by safepay
+          </p>
+        </section>
+      )}
+
+      {/* Paid, but not yet moved on by an admin. */}
+      {order.payment_state === "paid" && order.status === "pending" && (
+        <section className="rounded-2xl border-2 border-acid/40 bg-acid/10 p-5">
+          <p className="text-sm font-black uppercase tracking-widest text-acid">
+            payment received
+          </p>
+          <p className="mt-1 text-sm font-semibold text-white/60">
+            We have your payment. Your card goes to print next.
+          </p>
         </section>
       )}
 
